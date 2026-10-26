@@ -1,3 +1,32 @@
+# Rhine TTS Lab
+
+> 莱茵生命声学实验室 — a self-hosted **Breeze TTS 2** voice lab, tuned for **Windows + RTX 5080**.
+
+An opinionated fork of [breezeblue-ai/breeze-tts](https://github.com/breezeblue-ai/breeze-tts) (upstream Apache 2.0 code; model weights remain under BreezeBlue's research/non-commercial license). Upstream README follows below.
+
+## What this fork adds
+
+| Piece | What it does |
+| --- | --- |
+| `gui/index.html` | **RHINE TTS LAB** web console, served by the API itself at `http://127.0.0.1:7860/` — voice design / clone / direction / batch, live waveform, history, retry-safe transport, Rhine Lab × DeepSeek-Harness dark theme |
+| `tools/say.py` | One-shot CLI: synthesize → WAV → play (`say.py "text" -i "voice description"`) |
+| `start-breeze-server.cmd` | One-click Windows launcher with all required env vars baked in |
+| sdpa patch | `breeze_infer/api.py` ships with `attn_implementation="eager"`; this fork switches it to `"sdpa"` (≈3.6× faster, RTF ≈ 0.55–0.7 on an RTX 5080) |
+| `encode=base64` / `?buffered=1` | Extra response modes on both speech endpoints: full-body Content-Length or JSON-wrapped base64, for clients whose streaming-binary handling is unreliable |
+| empty-generation guard | Buffered/batch paths return HTTP 502 when a generation yields no audio, so clients can retry instead of saving silence |
+
+## Windows deployment notes (RTX 5080 / Blackwell sm120)
+
+1. Python 3.10+, then `python -m pip install torch==2.9.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128` and `python -m pip install -r requirements.txt triton-windows==3.5.1.post24` (the pin matters — newer Triton mismatches torch 2.9).
+2. Start with `start-breeze-server.cmd`. It sets:
+   - `TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0` — the static CUDA launcher crashes on Windows (`OverflowError`);
+   - `TRITON_CACHE_DIR=H:\tc`, `TORCHINDUCTOR_CACHE_DIR=H:\ic` — Triton kernel filenames are ~156 chars; long default temp paths blow past the Windows MAX_PATH limit mid-compile;
+   - `TORCHINDUCTOR_COMPILE_THREADS=1`.
+3. First start compiles CUDA graphs for ~14 minutes; warm restarts take 1–2 minutes. `--fast-all` uses ~15.5 GiB of VRAM — don't co-run other big models.
+4. Weights: `huggingface-cli download BreezeBlue/Breeze-TTS-2 --local-dir ..\breeze-tts-2` (set your proxy for huggingface.co).
+
+---
+
 <div align="center">
   <a href="https://breezeblue.ai/"><img src="assets/breezeblue-logo.png" alt="BreezeBlue" width="35%"></a>
   <br><br>

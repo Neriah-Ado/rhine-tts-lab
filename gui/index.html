@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RHINE TTS LAB · 声学实验室</title>
+<style>
+:root{
+  --bg:#131417;            /* DSH dark base */
+  --panel:#1b1d21;
+  --panel-2:#202228;
+  --border:#2b2e35;
+  --border-strong:#3a3e47;
+  --text:#f2f4f6;          /* DSH label-primary dark */
+  --text-2:#c9cdd2;        /* DSH label-secondary */
+  --text-3:#8b9097;        /* DSH label-tertiary */
+  --accent:#ffa726;        /* Rhine Lab amber */
+  --accent-deep:#f57c00;
+  --accent-soft:rgba(255,167,38,.12);
+  --ok:#4ade80; --err:#f87171;
+  --mono:"Cascadia Mono","JetBrains Mono",Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:var(--bg);color:var(--text);
+  font:14px/1.6 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+  min-height:100vh;
+  background-image:
+    radial-gradient(circle at 85% -10%,rgba(255,167,38,.07),transparent 42%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'%3E%3Cpath d='M28 2 54 17v32L28 64 2 49V17Z' fill='none' stroke='%23262a31' stroke-width='1'/%3E%3Cpath d='M28 65 54 80v15' fill='none' stroke='%23262a31' stroke-width='1'/%3E%3C/svg%3E");
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px 60px}
+
+/* ---------- entrance ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+header{animation:rise .45s ease both}
+.grid .panel{animation:rise .5s ease both}
+.grid .panel:nth-child(2){animation-delay:.06s}
+.panel:nth-of-type(2){animation-delay:.1s}
+
+/* ---------- header ---------- */
+header{
+  display:flex;align-items:center;gap:16px;
+  padding:18px 4px 16px;border-bottom:1px solid var(--border);
+  position:relative;
+}
+header::after{
+  content:"";position:absolute;left:0;bottom:-1px;width:220px;height:2px;
+  background:linear-gradient(90deg,var(--accent),transparent);
+}
+.logo{display:flex;align-items:center;gap:12px}
+.logo svg{width:40px;height:44px;filter:drop-shadow(0 0 8px rgba(255,167,38,.35))}
+.logo .outer{transform-origin:20px 22px;animation:spin 24s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.title-block h1{
+  font-size:19px;font-weight:700;letter-spacing:.14em;
+}
+.title-block h1 .cn{color:var(--text-2);font-weight:400;letter-spacing:.3em;margin-left:10px;font-size:14px}
+.title-block .code{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.08em}
+.spacer{flex:1}
+.status{
+  display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:12px;color:var(--text-3);
+  border:1px solid var(--border);border-radius:99px;padding:5px 14px;background:var(--panel);
+  transition:border-color .3s;
+}
+.status.online{border-color:rgba(74,222,128,.35)}
+.status.offline{border-color:rgba(248,113,113,.4)}
+.dot{width:8px;height:8px;border-radius:50%;background:#666;flex:none}
+.status.online .dot{background:var(--ok);animation:glow 2.2s ease-in-out infinite}
+.status.offline .dot{background:var(--err);animation:blink 1s steps(2) infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 4px var(--ok)}50%{box-shadow:0 0 10px var(--ok)}}
+@keyframes blink{50%{opacity:.25}}
+.status .meta{color:var(--text-3)}
+
+/* ---------- layout ---------- */
+.grid{display:grid;grid-template-columns:308px 1fr;gap:20px;margin-top:22px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+
+.panel{
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  position:relative;overflow:hidden;
+}
+.panel::before{ /* rhine corner tick */
+  content:"";position:absolute;top:0;left:0;width:26px;height:2px;background:var(--accent);
+}
+.panel-h{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 16px;border-bottom:1px solid var(--border);
+  font-size:13px;font-weight:600;letter-spacing:.06em;
+}
+.panel-h .tag{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:.12em;margin-left:auto}
+.panel-b{padding:16px}
+.panel{transition:border-color .25s}
+
+/* ---------- modes ---------- */
+.modes{display:flex;flex-direction:column;gap:8px}
+.mode{
+  display:flex;align-items:center;gap:12px;padding:11px 12px;cursor:pointer;
+  border:1px solid var(--border);border-radius:8px;background:var(--panel-2);
+  transition:border-color .18s,background .18s,transform .18s;user-select:none;
+}
+.mode:hover{border-color:var(--border-strong);transform:translateX(3px)}
+.mode.active{border-color:var(--accent);background:var(--accent-soft);transform:none}
+.mode .hex{width:12px;height:12px;flex:none;transition:transform .3s}
+.mode:hover .hex{transform:rotate(60deg)}
+.mode.active .hex polygon{fill:var(--accent);stroke:var(--accent)}
+.mode .hex polygon{fill:none;stroke:var(--text-3);stroke-width:1.6;transition:fill .2s,stroke .2s}
+.mode b{font-size:13px;font-weight:600}
+.mode small{display:block;color:var(--text-3);font-size:11px;line-height:1.4}
+
+.field{margin-top:16px}
+.field label{
+  display:flex;justify-content:space-between;align-items:baseline;
+  font-family:var(--mono);font-size:10.5px;color:var(--text-3);
+  letter-spacing:.14em;text-transform:uppercase;margin-bottom:7px;
+}
+.field label .val{color:var(--accent);letter-spacing:0;text-transform:none;font-size:12px}
+input[type=text],textarea,input[type=number]{
+  width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);padding:9px 11px;font:13px/1.5 inherit;outline:none;resize:vertical;
+  transition:border-color .2s;
+}
+input:focus,textarea:focus{border-color:var(--accent)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+input[type=file]{display:none}
+.file-btn{
+  display:block;text-align:center;padding:9px;border:1px dashed var(--border-strong);
+  border-radius:8px;color:var(--text-3);cursor:pointer;font-size:12.5px;transition:border-color .2s,color .2s;
+}
+.file-btn:hover{border-color:var(--accent);color:var(--text-2)}
+.file-btn.has{border-style:solid;border-color:var(--accent);color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{
+  font-family:var(--mono);font-size:11px;color:var(--text-2);cursor:pointer;
+  border:1px solid var(--border);border-radius:6px;padding:2px 8px;background:var(--panel-2);
+  transition:all .15s;
+}
+.chip:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.chip:active{transform:translateY(0)}
+
+/* ---------- main ---------- */
+textarea.big{min-height:170px;font-size:14.5px}
+.gen-row{display:flex;align-items:center;gap:14px;margin-top:16px;position:relative}
+.btn-gen{
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  background:linear-gradient(135deg,var(--accent),var(--accent-deep));
+  color:#1a1206;border:none;border-radius:9px;padding:11px 26px;
+  font-size:14px;font-weight:700;letter-spacing:.05em;
+  transition:transform .1s,box-shadow .2s,opacity .2s;position:relative;overflow:hidden;
+}
+.btn-gen:hover:not(:disabled){box-shadow:0 4px 18px rgba(255,167,38,.35)}
+.btn-gen:active:not(:disabled){transform:translateY(1px)}
+.btn-gen:disabled{opacity:.55;cursor:not-allowed}
+.btn-gen .eq{display:none;align-items:flex-end;gap:2px;height:14px}
+.btn-gen.busy .eq{display:flex}
+.btn-gen.busy .tri{display:none}
+.eq i{width:3px;background:#1a1206;border-radius:1px;animation:eq 0.9s ease-in-out infinite}
+.eq i:nth-child(2){animation-delay:.15s}
+.eq i:nth-child(3){animation-delay:.3s}
+.eq i:nth-child(4){animation-delay:.45s}
+@keyframes eq{0%,100%{height:3px}50%{height:14px}}
+.gen-meta{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
+.gen-meta b{color:var(--accent);font-weight:600}
+.gen-meta.busy{animation:shimmer 1.4s linear infinite}
+@keyframes shimmer{0%{opacity:1}50%{opacity:.45}100%{opacity:1}}
+/* indeterminate progress strip */
+.progress{
+  position:absolute;left:0;right:0;bottom:-9px;height:2px;border-radius:2px;overflow:hidden;
+  background:var(--border);opacity:0;transition:opacity .2s;
+}
+.progress.on{opacity:1}
+.progress::after{
+  content:"";position:absolute;top:0;bottom:0;width:30%;border-radius:2px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:slide 1.1s linear infinite;
+}
+@keyframes slide{from{left:-30%}to{left:100%}}
+
+/* waveform */
+.wave-box{
+  margin-top:16px;border:1px solid var(--border);border-radius:8px;background:#0e0f12;
+  padding:10px 12px 6px;animation:rise .35s ease both;
+}
+canvas{width:100%;height:110px;display:block}
+canvas.reveal{animation:reveal .6s ease both}
+@keyframes reveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.play-row{display:flex;align-items:center;gap:12px;padding:8px 2px 6px}
+.btn-play{
+  width:40px;height:40px;border-radius:50%;border:1px solid var(--accent);background:var(--accent-soft);
+  color:var(--accent);font-size:15px;cursor:pointer;flex:none;transition:background .2s,color .2s,transform .1s;
+}
+.btn-play:hover{background:var(--accent);color:#1a1206}
+.btn-play:active{transform:scale(.94)}
+.btn-ghost{
+  border:1px solid var(--border);background:var(--panel-2);color:var(--text-2);
+  border-radius:7px;padding:6px 14px;font-size:12.5px;cursor:pointer;transition:all .15s;
+}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+
+/* history */
+.hist{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+.hist-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  border:1px solid var(--border);border-radius:8px;background:var(--panel-2);cursor:pointer;
+  transition:border-color .15s,opacity .3s,transform .3s;
+}
+.hist-item:hover{border-color:var(--border-strong)}
+.hist-item.enter{animation:rise .3s ease both}
+.hist-item .idx{font-family:var(--mono);font-size:10px;color:var(--accent);flex:none}
+.hist-item .txt{flex:1;font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist-item .dur{font-family:var(--mono);font-size:11px;color:var(--text-3);flex:none}
+.empty{color:var(--text-3);font-size:12.5px;text-align:center;padding:22px 0}
+
+/* batch */
+.batch-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.batch-item{
+  display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);
+  border-radius:8px;background:var(--panel-2);animation:rise .3s ease both;
+  transition:border-color .15s,background .15s;
+}
+.batch-item .txt{flex:1;font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batch-item .dur{font-family:var(--mono);font-size:11px;color:var(--accent)}
+.batch-item.playing{border-color:var(--accent);background:var(--accent-soft)}
+
+/* footer strip */
+.foot{
+  margin-top:26px;display:flex;justify-content:space-between;align-items:center;
+  font-family:var(--mono);font-size:10.5px;color:var(--text-3);letter-spacing:.1em;
+  border-top:1px solid var(--border);padding-top:12px;
+}
+.foot .r{color:var(--accent)}
+
+/* toast */
+#toast{
+  position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--panel-2);border:1px solid var(--border-strong);border-radius:9px;
+  padding:10px 20px;font-size:13px;color:var(--text);opacity:0;
+  transition:all .25s;z-index:99;max-width:70vw;box-shadow:0 8px 30px rgba(0,0,0,.5);
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{border-color:var(--err);color:var(--err)}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+}
+
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 40 44"><polygon class="outer" points="20,1 38,11.5 38,32.5 20,43 2,32.5 2,11.5" fill="none" stroke="#ffa726" stroke-width="2.4"/><polygon points="20,10 30,16 30,28 20,34 10,28 10,16" fill="rgba(255,167,38,.18)" stroke="#ffa726" stroke-width="1.4"/><circle cx="20" cy="22" r="4.5" fill="#ffa726"/></svg>
+    <div class="title-block">
+      <h1>RHINE TTS LAB<span class="cn">声学实验室</span></h1>
+      <div class="code" id="modelCode">RL-BZ2 // BREEZE TTS-2 · LOCAL NODE</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">CONNECTING…</span><span class="meta" id="statusMeta"></span></div>
+</header>
+
+<div class="grid">
+  <!-- ============ left column ============ -->
+  <div>
+    <div class="panel">
+      <div class="panel-h">合成模式<span class="tag">MODE-01</span></div>
+      <div class="panel-b">
+        <div class="modes" id="modes">
+          <div class="mode active" data-mode="design">
+            <svg class="hex" viewBox="0 0 12 12"><polygon points="6,0.5 11,3.5 11,8.5 6,11.5 1,8.5 1,3.5"/></svg>
+            <div><b>声音设计</b><small>纯文本描述造一个新声音，无需参考音频</small></div>
+          </div>
+          <div class="mode" data-mode="clone">
+            <svg class="hex" viewBox="0 0 12 12"><polygon points="6,0.5 11,3.5 11,8.5 6,11.5 1,8.5 1,3.5"/></svg>
+            <div><b>声音克隆</b><small>上传参考音频 + 精确文字稿，复刻音色</small></div>
+          </div>
+          <div class="mode" data-mode="direction">
+            <svg class="hex" viewBox="0 0 12 12"><polygon points="6,0.5 11,3.5 11,8.5 6,11.5 1,8.5 1,3.5"/></svg>
+            <div><b>声音导演</b><small>克隆音色的同时控制情绪、语速与语气</small></div>
+          </div>
+          <div class="mode" data-mode="batch">
+            <svg class="hex" viewBox="0 0 12 12"><polygon points="6,0.5 11,3.5 11,8.5 6,11.5 1,8.5 1,3.5"/></svg>
+            <div><b>批量合成</b><small>一次提交多段文本，逐段预览下载</small></div>
+          </div>
+        </div>
+
+        <div class="field" id="fInstruction">
+          <label>VOICE INSTRUCTION · 声音指令</label>
+          <input type="text" id="instruction" placeholder="例：一位温柔自信的年轻女性，声音清晰，语气亲切。">
+        </div>
+
+        <div class="field" id="fRefAudio" style="display:none">
+          <label>REFERENCE AUDIO · 参考音频</label>
+          <label class="file-btn" id="refBtn">点击选择参考音频（干净人声，WAV/MP3）</label>
+          <input type="file" id="refAudio" accept="audio/*">
+        </div>
+        <div class="field" id="fRefText" style="display:none">
+          <label>REF TRANSCRIPT · 文字稿（须与音频逐字一致）</label>
+          <textarea id="refText" rows="2" placeholder="这是参考音频的准确文字稿。"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-h">参数<span class="tag">PARAM-02</span></div>
+      <div class="panel-b">
+        <div class="field" style="margin-top:0">
+          <label>CFG SCALE · 指令强度 <span class="val" id="cfgVal">4.0</span></label>
+          <input type="range" id="cfg" min="1" max="8" step="0.5" value="4">
+        </div>
+        <div class="field">
+          <label>SEED · 种子</label>
+          <input type="number" id="seed" value="42" step="1">
+        </div>
+        <div class="field">
+          <label>MAX TOKENS · 最大长度 <span class="val" id="tokVal">600</span></label>
+          <input type="range" id="maxtok" min="100" max="1500" step="50" value="600">
+          <div style="font-size:11px;color:var(--text-3);margin-top:5px">1 token ≈ 1/12.5 秒音频，600 ≈ 48 秒</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ right column ============ -->
+  <div>
+    <div class="panel">
+      <div class="panel-h" id="ioTitle">文本输入<span class="tag">IO-03</span></div>
+      <div class="panel-b">
+        <div id="singleIO">
+          <textarea class="big" id="text" placeholder="输入要合成的文本。可用内联情绪标记：英文 (laugh) (sigh) (clears throat)，中文 [笑] [叹气] [咳嗽] [清嗓子]。"></textarea>
+          <div class="chips">
+            <span class="chip" data-t="(laugh)">(laugh)</span>
+            <span class="chip" data-t="(sigh)">(sigh)</span>
+            <span class="chip" data-t="(clears throat)">(clears throat)</span>
+            <span class="chip" data-t="[笑]">[笑]</span>
+            <span class="chip" data-t="[叹气]">[叹气]</span>
+            <span class="chip" data-t="[咳嗽]">[咳嗽]</span>
+            <span class="chip" data-t="[清嗓子]">[清嗓子]</span>
+          </div>
+          <div class="gen-row">
+            <button class="btn-gen" id="gen">
+              <span class="eq"><i></i><i></i><i></i><i></i></span>
+              <svg class="tri" width="14" height="14" viewBox="0 0 14 14"><polygon points="13,7 3,13 3,1" fill="currentColor"/></svg>
+              <span id="genLabel">开始合成</span>
+            </button>
+            <div class="gen-meta" id="meta">READY · 单并发服务，生成中请勿重复提交</div>
+            <div class="progress" id="progress"></div>
+          </div>
+
+          <div class="wave-box" id="waveBox" style="display:none">
+            <canvas id="wave" width="1200" height="110"></canvas>
+            <div class="play-row">
+              <button class="btn-play" id="play">▶</button>
+              <div class="gen-meta" id="audioMeta"></div>
+              <div style="flex:1"></div>
+              <button class="btn-ghost" id="dl">下载 WAV</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="batchIO" style="display:none">
+          <textarea class="big" id="batchTexts" placeholder="每行一条文本，最多 128 条。批量接口会整批合成，速度远快于逐条发送。"></textarea>
+          <div class="gen-row">
+            <button class="btn-gen" id="genBatch">
+              <span class="eq"><i></i><i></i><i></i><i></i></span>
+              <svg class="tri" width="14" height="14" viewBox="0 0 14 14"><polygon points="13,7 3,13 3,1" fill="currentColor"/></svg>
+              <span id="genBatchLabel">批量合成</span>
+            </button>
+            <div class="gen-meta" id="batchMeta">READY</div>
+            <div class="progress" id="progressBatch"></div>
+          </div>
+          <div class="batch-list" id="batchList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-h">本次会话记录<span class="tag" id="histTag">LOG-04</span></div>
+      <div class="panel-b">
+        <div class="hist" id="hist"><div class="empty">暂无记录 — 合成结果会出现在这里</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  <span>RHINE LAB ACOUSTICS DIVISION · RL-RNT-TTS</span>
+  <span class="r" id="footStat">— —</span>
+  <span>LOCAL NODE 127.0.0.1:7860 · NON-COMMERCIAL USE</span>
+</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const API = location.origin;
+const SR = 24000, BYTES_PER_SEC = SR * 2; // s16le mono
+const HISTORY_MAX = 10;      // keep at most N takes with live audio buffers
+const GEN_ATTEMPTS = 3;      // synthesis attempts per click
+
+/* ---------- status ---------- */
+const OFFLINE_HINT = ' · 检查服务已启动；若开了 Clash，请确认 127.0.0.1 为直连';
+async function pollStatus(){
+  const el = document.getElementById('status'), t = document.getElementById('statusText'), m = document.getElementById('statusMeta');
+  try{
+    const h = await fetch(API+'/health'); if(!h.ok) throw 0;
+    const j = await h.json();
+    const mo = await fetch(API+'/v1/model').then(r=>r.json()).catch(()=>null);
+    el.classList.add('online'); el.classList.remove('offline');
+    t.textContent = 'NODE ONLINE';
+    m.textContent = mo ? ` · ${mo.frame_rate}fps ${mo.max_new_tokens}tok` : '';
+    document.getElementById('footStat').textContent = 'STREAM 24kHz PCM · RTF≈0.55 @RTX5080';
+  }catch(e){
+    el.classList.add('offline'); el.classList.remove('online');
+    t.textContent = 'NODE OFFLINE'; m.textContent = OFFLINE_HINT;
+    document.getElementById('footStat').textContent = '— —';
+  }
+}
+pollStatus(); setInterval(pollStatus, 5000);
+
+/* ---------- toast ---------- */
+let toastTimer;
+function toast(msg, err){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = err ? 'show err' : 'show';
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>el.className='', 3600);
+}
+
+/* ---------- mode switching ---------- */
+let mode = 'design';
+document.getElementById('modes').addEventListener('click', e=>{
+  const m = e.target.closest('.mode'); if(!m) return;
+  mode = m.dataset.mode;
+  document.querySelectorAll('.mode').forEach(x=>x.classList.toggle('active', x===m));
+  const batch = mode==='batch';
+  document.getElementById('singleIO').style.display = batch?'none':'';
+  document.getElementById('batchIO').style.display = batch?'':'none';
+  document.getElementById('ioTitle').firstChild.textContent = batch?'批量文本输入':'文本输入';
+  const hasRef = mode==='clone'||mode==='direction';
+  document.getElementById('fRefAudio').style.display = hasRef?'':'none';
+  document.getElementById('fRefText').style.display = hasRef?'':'none';
+  const hasInstr = mode==='design'||mode==='direction';
+  document.getElementById('fInstruction').style.display = hasInstr?'':'none';
+});
+
+/* ---------- chips insert at cursor ---------- */
+document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+  const ta = document.getElementById('text'), s = ta.selectionStart||ta.value.length;
+  ta.value = ta.value.slice(0,s) + c.dataset.t + ta.value.slice(ta.selectionEnd||s);
+  ta.focus(); ta.selectionStart = ta.selectionEnd = s + c.dataset.t.length;
+}));
+
+/* ---------- sliders / file ---------- */
+document.getElementById('cfg').oninput = e=>document.getElementById('cfgVal').textContent = (+e.target.value).toFixed(1);
+document.getElementById('maxtok').oninput = e=>document.getElementById('tokVal').textContent = e.target.value;
+document.getElementById('refAudio').onchange = e=>{
+  const f = e.target.files[0], b = document.getElementById('refBtn');
+  b.textContent = f ? '✓ ' + f.name + ' (' + (f.size/1024|0) + ' KB)' : '点击选择参考音频';
+  b.classList.toggle('has', !!f);
+};
+
+/* ---------- audio helpers ---------- */
+let audioCtx, currentSrc;
+function ctx(){ return audioCtx || (audioCtx = new AudioContext({sampleRate: SR})); }
+function pcmToF32(bytes){
+  const n = bytes.byteLength >> 1, f = new Float32Array(n), dv = new DataView(bytes);
+  for(let i=0;i<n;i++){ const v = dv.getInt16(i*2, true); f[i] = v<0 ? v/32768 : v/32767; }
+  return f;
+}
+function bytesToWav(bytes){
+  const n = bytes.byteLength, buf = new ArrayBuffer(44+n), dv = new DataView(buf);
+  const w = (o,s)=>{for(let i=0;i<s.length;i++)dv.setUint8(o+i,s.charCodeAt(i))};
+  w(0,'RIFF'); dv.setUint32(4,36+n,true); w(8,'WAVE'); w(12,'fmt ');
+  dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,SR,true); dv.setUint32(28,BYTES_PER_SEC,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true); w(36,'data'); dv.setUint32(40,n,true);
+  new Uint8Array(buf,44).set(new Uint8Array(bytes));
+  return buf;
+}
+function drawWave(f32){
+  const c = document.getElementById('wave'), g = c.getContext('2d');
+  const W = c.clientWidth || c.width;
+  c.width = W; // re-anchor backing store to display width so bars stay visible
+  g.clearRect(0,0,W,c.height);
+  g.strokeStyle = 'rgba(255,167,38,.25)'; g.beginPath(); g.moveTo(0,c.height/2); g.lineTo(W,c.height/2); g.stroke();
+  const barW = 2, gap = 1, nBars = Math.floor(W/(barW+gap));
+  const step = Math.max(1, Math.floor(f32.length/nBars));
+  const peaks = new Float32Array(nBars);
+  let peakMax = 0;
+  for(let i=0;i<nBars;i++){
+    let p = 0;
+    for(let j=i*step;j<Math.min((i+1)*step,f32.length);j+=2){ const v = Math.abs(f32[j]||0); if(v>p) p=v; }
+    peaks[i] = p; if(p>peakMax) peakMax = p;
+  }
+  const norm = peakMax > 1e-4 ? peakMax : 1;
+  g.fillStyle = '#ffa726';
+  for(let i=0;i<nBars;i++){
+    const h = Math.max(1.5, Math.sqrt(peaks[i]/norm)*c.height*.95);
+    g.fillRect(i*(barW+gap), (c.height-h)/2, barW, h);
+  }
+}
+function stopAudio(){ if(currentSrc){ try{currentSrc.stop()}catch(e){}; currentSrc=null; } }
+function play(f32){
+  stopAudio();
+  const b = ctx().createBuffer(1, f32.length, SR); b.getChannelData(0).set(f32);
+  currentSrc = ctx().createBufferSource(); currentSrc.buffer = b; currentSrc.connect(ctx().destination);
+  currentSrc.start();
+  return b.duration;
+}
+function download(f32, name){
+  const dv = new DataView(new ArrayBuffer(f32.length*2));
+  for(let i=0;i<f32.length;i++){ const v = Math.max(-1,Math.min(1,f32[i])); dv.setInt16(i*2, v<0?v*32768:v*32767, true); }
+  const url = URL.createObjectURL(new Blob([bytesToWav(dv.buffer)],{type:'audio/wav'}));
+  const a = document.createElement('a'); a.href=url; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+}
+
+/* ---------- history (memory-capped) ---------- */
+let seq = 0;
+const liveBuffers = []; // keep references so old takes can be released
+function addHistory(text, f32, rtf){
+  seq++;
+  const el = document.createElement('div'); el.className='hist-item enter';
+  el.innerHTML = `<span class="idx">#${String(seq).padStart(3,'0')}</span><span class="txt"></span><span class="dur">${(f32.length/SR).toFixed(1)}s${rtf?' · RTF '+rtf:''}</span>`;
+  el.querySelector('.txt').textContent = text;
+  el.onclick = ()=>{ if(el.__f32){ const d = play(el.__f32); showWave(text, el.__f32, d); } else toast('该记录的音频缓冲已释放（超出保留上限）', true); };
+  el.__f32 = f32;
+  liveBuffers.push(el);
+  while(liveBuffers.length > HISTORY_MAX){
+    const old = liveBuffers.shift();
+    old.__f32 = null;              // release the Float32Array for GC
+    old.style.opacity = '.45';
+    old.querySelector('.dur').textContent += ' · 已释放';
+    old.onclick = null;
+  }
+  const h = document.getElementById('hist');
+  const emp = h.querySelector('.empty'); if(emp) emp.remove();
+  h.prepend(el);
+  document.getElementById('histTag').textContent = `LOG-04 · ${liveBuffers.length}/${HISTORY_MAX}`;
+}
+function showWave(text, f32, dur){
+  const box = document.getElementById('waveBox');
+  box.style.display='';
+  const c = document.getElementById('wave');
+  c.classList.remove('reveal'); void c.offsetWidth; c.classList.add('reveal');
+  drawWave(f32);
+  document.getElementById('audioMeta').textContent = `${dur.toFixed(2)}s · ${(f32.length/SR).toFixed(1)}s audio · 24kHz mono`;
+  document.getElementById('play').onclick = ()=>play(f32);
+  document.getElementById('dl').onclick = ()=>download(f32, 'breeze-tts-'+Date.now()+'.wav');
+}
+
+/* ---------- busy state ---------- */
+let busy = false;
+function setBusy(b){
+  busy = b;
+  for(const [btn, prog] of [['gen','progress'],['genBatch','progressBatch']]){
+    document.getElementById(btn).disabled = b;
+    document.getElementById(btn).classList.toggle('busy', b);
+    document.getElementById(prog).classList.toggle('on', b);
+  }
+  document.getElementById('genLabel').textContent = b ? '合成中…' : '开始合成';
+  document.getElementById('genBatchLabel').textContent = b ? '合成中…' : '批量合成';
+  document.getElementById('meta').classList.toggle('busy', b);
+}
+
+/* ---------- robust transport: base64 JSON via XHR, with retries ---------- */
+function xhrJSON(url, form, timeoutMs){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.timeout = timeoutMs;
+    xhr.onload = () => {
+      if(xhr.status===409) return reject(Object.assign(new Error('busy'), {code:'busy'}));
+      if(xhr.status!==200){
+        let d = 'HTTP '+xhr.status;
+        try{ d = JSON.parse(xhr.responseText).detail || d; }catch(e){}
+        return reject(Object.assign(new Error(d), {code:'http', status:xhr.status}));
+      }
+      try{
+        const j = JSON.parse(xhr.responseText);
+        const bin = atob(j.audio);
+        const bytes = new Uint8Array(bin.length);
+        for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+        resolve({bytes, segmentBytes: (j.segment_bytes||[]).map(Number)});
+      }catch(e){ reject(Object.assign(new Error('响应解析失败：'+e.message), {code:'parse'})); }
+    };
+    xhr.ontimeout = () => reject(Object.assign(new Error('请求超时'), {code:'timeout'}));
+    xhr.onerror = () => reject(Object.assign(new Error('网络错误'), {code:'network'}));
+    xhr.send(form);
+  });
+}
+function peakOfF32(f){ let p=0; for(let i=0;i<f.length;i++){const a=Math.abs(f[i]); if(a>p)p=a;} return p; }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+/* One synthesis with automatic retries — the UI must never dead-end on a
+   transient hiccup: 409 waits for the single slot, empty audio and network
+   errors are retried with fresh requests. */
+async function postSpeechWithRetry(form, onNote){
+  let lastErr;
+  for(let attempt=1; attempt<=GEN_ATTEMPTS; attempt++){
+    try{
+      if(attempt>1) onNote(`RETRY ${attempt}/${GEN_ATTEMPTS} · <b>streaming…</b>`);
+      const t0 = performance.now();
+      const {bytes} = await xhrJSON(API+'/v1/audio/speech', form, 600000);
+      const f32 = pcmToF32(bytes.buffer);
+      if(peakOfF32(f32) < 1e-3) throw Object.assign(new Error('空音频'), {code:'empty'});
+      const secs = (performance.now()-t0)/1000;
+      return {f32, wall: secs, rtf: (secs/(f32.length/SR)).toFixed(2)};
+    }catch(err){
+      lastErr = err;
+      if(err.code==='busy' && attempt<GEN_ATTEMPTS){
+        onNote(`服务正忙（单并发）· <b>自动等待重试…</b>`);
+        await sleep(2500);
+        continue;
+      }
+      if((err.code==='empty'||err.code==='network'||err.code==='timeout'||err.code==='parse') && attempt<GEN_ATTEMPTS){
+        await sleep(800*attempt);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+async function postSpeech(form, onNote){
+  form.append('encode', 'base64');
+  return postSpeechWithRetry(form, onNote);
+}
+
+/* ---------- generation ---------- */
+document.getElementById('gen').onclick = async ()=>{
+  if(busy) return;
+  const text = document.getElementById('text').value.trim();
+  if(!text) return toast('请先输入文本', true);
+  const cfg = +document.getElementById('cfg').value, seed = +document.getElementById('seed').value;
+  const instrEl = document.getElementById('instruction').value.trim();
+  const hasInstr = (mode==='design'||mode==='direction') && instrEl;
+  // tts_plain template (no instruction, no reference) only supports cfg_scale=1
+  const effCfg = hasInstr || ((mode==='clone'||mode==='direction') && document.getElementById('refAudio').files[0]) ? cfg : 1;
+  const f = new FormData();
+  f.append('text', text); f.append('cfg_scale', effCfg); f.append('seed', seed);
+  if(hasInstr) f.append('instruction', instrEl);
+  if(mode==='clone'||mode==='direction'){
+    const rf = document.getElementById('refAudio').files[0];
+    if(!rf) return toast('声音克隆需要先选择参考音频', true);
+    const rt = document.getElementById('refText').value.trim();
+    if(!rt) return toast('请填写参考音频的逐字文字稿', true);
+    f.append('ref_audio', rf, rf.name);
+    f.append('ref_text', rt);
+  }
+  const meta = document.getElementById('meta');
+  setBusy(true);
+  meta.innerHTML = 'GENERATING · <b>streaming…</b>' + (effCfg===1 && cfg!==1 ? ' · <span style="color:#ffa726">无指令模板已自动回退 CFG=1</span>' : '');
+  try{
+    const {f32, wall, rtf} = await postSpeech(f, n=>{ meta.innerHTML = n; });
+    const dur = play(f32);
+    showWave(text, f32, dur);
+    meta.innerHTML = `DONE in <b>${wall.toFixed(2)}s</b> · RTF <b>${rtf}</b> · ${(f32.length*2/48000).toFixed(1)}s audio`;
+    addHistory(text, f32, rtf);
+  }catch(e){
+    meta.textContent='ERROR';
+    toast('合成失败：'+e.message, true);
+  }
+  setBusy(false);
+};
+
+/* ---------- batch ---------- */
+document.getElementById('genBatch').onclick = async ()=>{
+  if(busy) return;
+  const lines = document.getElementById('batchTexts').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!lines.length) return toast('请输入至少一行文本', true);
+  if(lines.length>128) return toast('最多 128 条', true);
+  const f = new FormData();
+  f.append('texts', JSON.stringify(lines));
+  const instr = document.getElementById('instruction').value.trim();
+  const hasInstr = mode==='design' && instr;
+  const effCfg = hasInstr ? +document.getElementById('cfg').value : 1;
+  f.append('cfg_scale', effCfg);
+  f.append('seed', +document.getElementById('seed').value);
+  f.append('max_new_tokens', +document.getElementById('maxtok').value);
+  if(hasInstr) f.append('instruction', instr);
+  setBusy(true);
+  const bm = document.getElementById('batchMeta');
+  bm.classList.add('busy');
+  bm.innerHTML = 'GENERATING · <b>batch…</b>';
+  const list = document.getElementById('batchList'); list.innerHTML='';
+  try{
+    const t0 = performance.now();
+    f.append('encode', 'base64');
+    let res;
+    for(let attempt=1; attempt<=GEN_ATTEMPTS; attempt++){
+      try{
+        res = await xhrJSON(API+'/v1/audio/speech/batch', f, 600000);
+        break;
+      }catch(err){
+        if(err.code==='busy' && attempt<GEN_ATTEMPTS){ bm.innerHTML='服务正忙 · <b>自动等待重试…</b>'; await sleep(2500); continue; }
+        if(attempt<GEN_ATTEMPTS){ await sleep(800*attempt); continue; }
+        throw err;
+      }
+    }
+    const {bytes, segmentBytes} = res;
+    const buf = bytes.buffer;
+    const segSizes = segmentBytes.length ? segmentBytes : [bytes.length];
+    let off = 0, idx = 0;
+    for(const size of segSizes){
+      const seg = buf.slice(off, off+size); off += size;
+      if(!seg.byteLength) continue;
+      const f32 = pcmToF32(seg);
+      const row = document.createElement('div'); row.className='batch-item';
+      row.innerHTML = `<span class="idx" style="font-family:var(--mono);font-size:10px;color:var(--accent)">${String(idx+1).padStart(3,'0')}</span><span class="txt"></span><span class="dur">${(f32.length/SR).toFixed(1)}s</span><button class="btn-ghost">▶</button><button class="btn-ghost">WAV</button>`;
+      row.querySelector('.txt').textContent = lines[idx]||'';
+      const [bPlay,bWav] = row.querySelectorAll('button');
+      bPlay.onclick = ()=>{ document.querySelectorAll('.batch-item').forEach(x=>x.classList.remove('playing')); row.classList.add('playing'); play(f32); };
+      bWav.onclick = ()=>download(f32, 'batch-'+String(idx+1).padStart(3,'0')+'.wav');
+      list.appendChild(row);
+      addHistory(lines[idx]||'batch#'+(idx+1), f32);
+      idx++;
+    }
+    const wall = (performance.now()-t0)/1000;
+    bm.innerHTML = `DONE in <b>${wall.toFixed(1)}s</b> · ${idx} 段 · ${idx?(bytes.length/BYTES_PER_SEC/idx).toFixed(1):0}s/段平均`;
+  }catch(e){ toast('批量失败：'+e.message, true); bm.textContent='ERROR'; }
+  bm.classList.remove('busy');
+  setBusy(false);
+};
+
+/* keyboard: ctrl+enter to generate */
+document.addEventListener('keydown', e=>{
+  if((e.ctrlKey||e.metaKey) && e.key==='Enter'){ mode==='batch' ? document.getElementById('genBatch').click() : document.getElementById('gen').click(); }
+});
+
+/* headless smoke test: /?autotest=1 synthesizes and reports via document.title */
+if(new URLSearchParams(location.search).has('autotest')){
+  setTimeout(()=>{
+    document.querySelector('#text').value = '自动测试。';
+    document.querySelector('#gen').click();
+    const t = setInterval(()=>{
+      const m = document.getElementById('meta').textContent;
+      if(m.startsWith('DONE')||m==='ERROR'){ document.title = 'AUTOTEST:'+(m.startsWith('DONE')?'OK':'FAIL')+' '+m+' | '+(document.getElementById('toast').textContent||''); clearInterval(t); }
+    }, 500);
+  }, 1500);
+}
+</script>
+</body>
+</html>

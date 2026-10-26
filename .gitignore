@@ -17,3 +17,12 @@ htmlcov/
 .env.*
 !.env.example
 
+# Local runtime artifacts (Rhine TTS Lab)
+.venv/
+.inductor-cache/
+.triton-cache/
+server.log
+server.err.log
+tools/last-say.wav
+*.pcm
+

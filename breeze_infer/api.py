@@ -288,7 +288,7 @@ def _load_app(app: FastAPI, settings: ApiSettings) -> None:
     tokenizer, model, audio_tokenizer = load_runtime(
         settings.model,
         device=resolve_device(),
-        attn_implementation="eager",
+        attn_implementation="sdpa",
     )
     update_generation_config_for_breeze(model)
     batch_head_weights = _checkpoint_head_weights(model)
@@ -355,7 +355,9 @@ async def speech(
     ref_audio: UploadFile | None = OPTIONAL_AUDIO_FILE,
     ref_text: str = Form(""),
     seed: int = Form(42),
-) -> StreamingResponse:
+    buffered: bool = False,
+    encode: str = Form(""),
+) -> Response:
     if not _request_lock.acquire(blocking=False):
         raise HTTPException(
             status_code=409, detail="An inference request is already running."
@@ -431,15 +433,47 @@ async def speech(
                 if pcm:
                     yield pcm
 
+    response_headers = {
+        "X-Sample-Rate": str(app.state.runtime.sample_rate),
+        "X-Sample-Format": "s16le",
+        "Cache-Control": "no-store",
+    }
+
+    if buffered or encode == "base64":
+        # Full-body response for clients whose streaming handling is unreliable
+        # (e.g. embedded webviews): same payload, delivered with Content-Length.
+        # encode=base64 wraps it in JSON, dodging webview binary corruption.
+        def collect() -> bytes:
+            with closing(
+                _iter_seeded_audio_chunks(
+                    app.state.runtime,
+                    inputs,
+                    request_id=request_id,
+                    seed=seed,
+                )
+            ) as chunks:
+                return b"".join(pcm for chunk in chunks if (pcm := _pcm16(chunk.audio)))
+
+        pcm_data = await run_in_threadpool(collect)
+        cleanup()
+        if not pcm_data:
+            # Fail loudly so clients can retry instead of receiving an empty track.
+            raise HTTPException(status_code=502, detail="Generation produced no audio; please retry.")
+        if encode == "base64":
+            import base64
+
+            return JSONResponse({
+                "audio": base64.b64encode(pcm_data).decode("ascii"),
+                "sample_rate": app.state.runtime.sample_rate,
+                "segment_bytes": [len(pcm_data)],
+            })
+        return Response(content=pcm_data, media_type="audio/pcm", headers=response_headers)
+
     return _InferenceStreamingResponse(
         body(),
         cleanup,
         media_type="audio/pcm",
-        headers={
-            "X-Sample-Rate": str(app.state.runtime.sample_rate),
-            "X-Sample-Format": "s16le",
-            "Cache-Control": "no-store",
-        },
+        headers=response_headers,
     )
 
 
@@ -551,6 +585,7 @@ async def speech_batch(
     ref_text: str = Form(""),
     seed: int = Form(42),
     max_new_tokens: int = Form(MAX_NEW_TOKENS),
+    encode: str = Form(""),
 ) -> Response:
     """Synthesize a JSON array of texts in one batch.
 
@@ -621,6 +656,18 @@ async def speech_batch(
         if not worker_owns_cleanup:
             cleanup()
 
+    if not sum(len(segment) for segment in segments):
+        raise HTTPException(status_code=502, detail="Batch generation produced no audio; please retry.")
+
+    if encode == "base64":
+        import base64
+
+        return JSONResponse({
+            "audio": base64.b64encode(b"".join(segments)).decode("ascii"),
+            "sample_rate": app.state.runtime.sample_rate,
+            "segment_bytes": [len(segment) for segment in segments],
+        })
+
     return Response(
         content=b"".join(segments),
         media_type="application/octet-stream",
@@ -685,6 +732,14 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+_GUI_DIR = Path(__file__).resolve().parent.parent / "gui"
+if _GUI_DIR.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    # Registered after all API routes, so /v1/* and /health keep precedence.
+    app.mount("/", StaticFiles(directory=str(_GUI_DIR), html=True), name="gui")
 
 
 if __name__ == "__main__":
