@@ -337,7 +337,10 @@ canvas.reveal{animation:reveal .6s ease both}
       <div class="panel-b">
         <div class="perf-row"><span class="perf-label">GPU 利用率</span><div class="bar"><i id="barUtil"></i></div><span class="perf-val" id="valUtil">—</span></div>
         <div class="perf-row"><span class="perf-label">显存占用</span><div class="bar"><i id="barVram"></i></div><span class="perf-val" id="valVram">—</span></div>
+        <div class="perf-row"><span class="perf-label">服务进程</span><div class="bar"><i id="barProc"></i></div><span class="perf-val" id="valProc">—</span></div>
         <div class="perf-row"><span class="perf-label">电源状态</span><span class="perf-val" id="valPower">—</span></div>
+        <canvas id="utilSpark" width="264" height="30" style="width:100%;height:30px;display:block;margin:4px 0 2px"></canvas>
+        <div style="font-size:10px;color:var(--text-3);letter-spacing:.08em;font-family:var(--mono)">GPU UTIL · LAST 60 SAMPLES</div>
         <div style="font-size:11px;color:var(--text-3);margin-top:8px;line-height:1.5">页面关闭约 75 秒后自动释放 GPU（显存 ≤20%）；合成请求会自动唤醒（首次需重建运行时）。</div>
       </div>
     </div>
@@ -452,6 +455,26 @@ async function pollStatus(){
   document.getElementById('barVram').style.width = vramPct+'%';
   document.getElementById('valUtil').textContent = util.toFixed(0)+'%';
   document.getElementById('valVram').textContent = (p.vram_used_gb||0).toFixed(1)+'/'+(p.vram_total_gb||0).toFixed(0)+'G';
+  const procPct = p.vram_total_gb ? Math.min(100, ((p.proc_vram_gb||0)/p.vram_total_gb)*100) : 0;
+  document.getElementById('barProc').style.width = procPct+'%';
+  document.getElementById('valProc').textContent = (p.proc_vram_gb||0).toFixed(1)+'G';
+  window.__utilHist = (window.__utilHist||[]); window.__utilHist.push(util);
+  if(window.__utilHist.length > 60) window.__utilHist.shift();
+  {
+    const sc = document.getElementById('utilSpark'), g = sc.getContext('2d');
+    const W = sc.clientWidth || sc.width; sc.width = W;
+    g.clearRect(0,0,W,sc.height);
+    g.strokeStyle = 'rgba(255,167,38,.2)'; g.beginPath(); g.moveTo(0,sc.height-1); g.lineTo(W,sc.height-1); g.stroke();
+    const h = window.__utilHist, n = h.length;
+    if(n>1){
+      g.strokeStyle = '#ffa726'; g.lineWidth = 1.5; g.beginPath();
+      for(let i=0;i<n;i++){
+        const x = i/(59)*W, y = sc.height-2 - (h[i]/100)*(sc.height-4);
+        i?g.lineTo(x,y):g.moveTo(x,y);
+      }
+      g.stroke(); g.lineWidth = 1;
+    }
+  }
   window.__gpuState = p.gpu;
   const pv = document.getElementById('valPower');
   pv.textContent = p.gpu.toUpperCase();
@@ -497,16 +520,19 @@ document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
 /* ---------- sliders / file ---------- */
 document.getElementById('cfg').oninput = e=>document.getElementById('cfgVal').textContent = (+e.target.value).toFixed(1);
 document.getElementById('maxtok').oninput = e=>document.getElementById('tokVal').textContent = e.target.value;
+let convertingRef = false;
 async function setRefFile(file){
   const b = document.getElementById('refBtn'), label = document.getElementById('refBtnText');
   if(!file){ label.textContent = '点击选择参考音频（WAV/MP3/M4A/FLAC/OGG 均可）'; b.classList.remove('has'); return; }
-  label.textContent = '⏳ 转换中… ' + file.name;
+  convertingRef = true;
+  label.textContent = '⏳ 解码/转换中… ' + file.name;
   b.classList.add('has');
   try{
     // Client-side format conversion: the browser decodes any codec it can play
     // (mp3/m4a/aac/ogg/flac/wav…), decodeAudioData resamples to our 24 kHz
     // context rate, then we mix down to mono and re-encode 16-bit WAV.
     const buf = await ctx().decodeAudioData(await file.arrayBuffer());
+    const fmt = (buf.numberOfChannels>1?'立体声':'单声道') + ' · ' + buf.duration.toFixed(1) + 's';
     let f32;
     if(buf.numberOfChannels === 1) f32 = buf.getChannelData(0);
     else {
@@ -518,12 +544,13 @@ async function setRefFile(file){
     const converted = new File([f32ToWav(f32)], file.name.replace(/\.[^.]+$/,'') + '.24k-mono.wav', {type:'audio/wav'});
     const input = document.getElementById('refAudio');
     const dt = new DataTransfer(); dt.items.add(converted); input.files = dt.files;
-    label.textContent = '✓ ' + converted.name + ' (' + (converted.size/1024|0) + ' KB · 24kHz 单声道，由 ' + file.name + ' 转换)';
+    label.textContent = '✓ ' + converted.name + ' · 源(' + fmt + ') → 24kHz 单声道 · ' + (converted.size/1024|0) + ' KB';
   }catch(err){
     label.textContent = '✗ 无法解码 ' + file.name + '（浏览器不支持该格式），请换 WAV/MP3/M4A/FLAC/OGG';
     b.classList.remove('has');
     toast('参考音频转换失败：' + err.message, true);
   }
+  convertingRef = false;
 }
 document.getElementById('refAudio').onchange = e=>setRefFile(e.target.files[0]);
 /* Drag & drop: works even where the native file picker can't open
@@ -702,6 +729,7 @@ async function postSpeechWithRetry(form, onNote){
 }
 async function postSpeech(form, onNote){
   form.append('encode', 'base64');
+  form.append('wait', '180'); // server-side slot queue: no 409/re-upload round trips
   return postSpeechWithRetry(form, onNote);
 }
 
@@ -727,6 +755,7 @@ document.getElementById('refText').addEventListener('input', ()=>updateJpNote(do
 
 document.getElementById('gen').onclick = async ()=>{
   if(busy) return;
+  if(convertingRef) return toast('参考音频还在转换中，请稍候', true);
   const text = document.getElementById('text').value.trim();
   if(!text) return toast('请先输入文本', true);
   const cfg = +document.getElementById('cfg').value, seed = +document.getElementById('seed').value;
@@ -775,6 +804,7 @@ document.getElementById('gen').onclick = async ()=>{
 /* ---------- batch ---------- */
 document.getElementById('genBatch').onclick = async ()=>{
   if(busy) return;
+  if(convertingRef) return toast('参考音频还在转换中，请稍候', true);
   const lines = document.getElementById('batchTexts').value.split('\n').map(s=>s.trim()).filter(Boolean);
   if(!lines.length) return toast('请输入至少一行文本', true);
   if(lines.length>128) return toast('最多 128 条', true);
@@ -788,6 +818,7 @@ document.getElementById('genBatch').onclick = async ()=>{
   f.append('cfg_scale', effCfg);
   f.append('seed', +document.getElementById('seed').value);
   f.append('max_new_tokens', +document.getElementById('maxtok').value);
+  f.append('wait', '180');
   if(hasInstr) f.append('instruction', instr);
   setBusy(true);
   const bm = document.getElementById('batchMeta');
