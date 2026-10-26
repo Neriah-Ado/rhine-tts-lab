@@ -141,21 +141,56 @@ def _gpu_watchdog(app: FastAPI) -> None:
 
 
 # Cheap device-wide GPU stats, refreshed off the request path for /v1/power.
-_gpu_stats = {"util_pct": 0.0, "vram_used_gb": 0.0, "vram_total_gb": 0.0}
+# pynvml (in-process NVML) is preferred; the nvidia-smi subprocess is only a
+# fallback. The whole sampler is skipped while the runtime is released —
+# nothing GPU-side is moving then, and the context memory is already known.
+_gpu_stats = {"util_pct": 0.0, "vram_used_gb": 0.0, "vram_total_gb": 0.0, "proc_vram_gb": 0.0}
+_nvml = None
+
+
+def _nvml_init():
+    global _nvml
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        _nvml = (pynvml, pynvml.nvmlDeviceGetHandleByIndex(0))
+    except Exception:
+        _nvml = None
 
 
 def _gpu_stats_sampler() -> None:
+    _nvml_init()
     while True:
         try:
+            nvml, handle = _nvml if _nvml is not None else (None, None)
             if torch.cuda.is_available():
                 free, total = torch.cuda.mem_get_info()
                 _gpu_stats["vram_used_gb"] = round((total - free) / 2**30, 2)
                 _gpu_stats["vram_total_gb"] = round(total / 2**30, 2)
-            probe = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=4,
-            )
-            _gpu_stats["util_pct"] = float(probe.stdout.strip().splitlines()[0])
+                try:
+                    procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+                    mine = [m.used for m in procs if m.pid == os.getpid()]
+                    _gpu_stats["proc_vram_gb"] = round(mine[0] / 2**30, 2) if mine else 0.0
+                except Exception:
+                    _gpu_stats["proc_vram_gb"] = round(torch.cuda.memory_reserved() / 2**30, 2)
+            if not _power["cold"]:
+                if _nvml is not None:
+                    pynvml, handle = _nvml
+                    _gpu_stats["util_pct"] = float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
+                    mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    _gpu_stats["vram_used_gb"] = round(mem.used / 2**30, 2)
+                    _gpu_stats["vram_total_gb"] = round(mem.total / 2**30, 2)
+                else:
+                    probe = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=4,
+                    )
+                    row = probe.stdout.strip().splitlines()[0].replace(" ", "").split(",")
+                    _gpu_stats["util_pct"] = float(row[0])
+                    _gpu_stats["vram_used_gb"] = round(float(row[1]) / 1024, 2)
+                    _gpu_stats["vram_total_gb"] = round(float(row[2]) / 1024, 2)
         except Exception:
             pass  # stats are best-effort; never break the request path
         time.sleep(5)
@@ -402,6 +437,7 @@ def _swapped_weights(
 
 
 def _load_app(app: FastAPI, settings: ApiSettings) -> None:
+    torch.set_float32_matmul_precision("high")  # TF32 on Blackwell tensor cores
     tokenizer, model, audio_tokenizer = load_runtime(
         settings.model,
         device=resolve_device(),
@@ -439,11 +475,29 @@ def _load_app(app: FastAPI, settings: ApiSettings) -> None:
     app.state.batch_depth_decoder = batch_depth_decoder
 
 
+async def _acquire_slot(wait_s: float) -> None:
+    """Wait for the single inference slot instead of failing fast with 409.
+
+    Clients that cannot wait pass wait=0 and keep the old 409 semantics; the
+    console passes a generous wait so a queued request never re-uploads.
+    """
+    deadline = time.time() + max(0.0, wait_s)
+    while not _request_lock.acquire(blocking=False):
+        if time.time() >= deadline:
+            raise HTTPException(
+                status_code=409, detail="An inference request is already running."
+            )
+        await asyncio.sleep(0.5)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _settings is None:
         raise RuntimeError("API settings are not initialized")
     _load_app(app, _settings)
+    # warmup takes a while and uvicorn only listens afterwards — restart the
+    # heartbeat clock so the watchdog does not instantly release the fresh runtime
+    _power["last_heartbeat"] = _power["last_request"] = time.time()
     threading.Thread(target=_gpu_watchdog, args=(app,), daemon=True, name="gpu-watchdog").start()
     threading.Thread(target=_gpu_stats_sampler, daemon=True, name="gpu-stats").start()
     yield
@@ -474,6 +528,7 @@ def _power_payload() -> dict:
         "gpu_util_pct": _gpu_stats["util_pct"],
         "vram_used_gb": _gpu_stats["vram_used_gb"],
         "vram_total_gb": _gpu_stats["vram_total_gb"],
+        "proc_vram_gb": _gpu_stats["proc_vram_gb"],
     }
 
 
@@ -506,11 +561,9 @@ async def speech(
     seed: int = Form(42),
     buffered: bool = False,
     encode: str = Form(""),
+    wait: float = Form(0.0),
 ) -> Response:
-    if not _request_lock.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409, detail="An inference request is already running."
-        )
+    await _acquire_slot(wait)
 
     if _power["cold"]:
         # released while idle — rebuild the runtime before serving
@@ -524,6 +577,7 @@ async def speech(
             if reference_path is not None:
                 reference_path.unlink(missing_ok=True)
         finally:
+            _power["last_request"] = time.time()
             _request_lock.release()
 
     try:
@@ -746,16 +800,14 @@ async def speech_batch(
     seed: int = Form(42),
     max_new_tokens: int = Form(MAX_NEW_TOKENS),
     encode: str = Form(""),
+    wait: float = Form(0.0),
 ) -> Response:
     """Synthesize a JSON array of texts in one batch.
 
     The body is the concatenated s16le PCM of every segment in request order;
     ``X-Segment-Bytes`` lists each segment's byte length so callers can split it.
     """
-    if not _request_lock.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409, detail="An inference request is already running."
-        )
+    await _acquire_slot(wait)
 
     if _power["cold"]:
         await run_in_threadpool(_ensure_gpu, app)
@@ -769,6 +821,7 @@ async def speech_batch(
             if reference_path is not None:
                 reference_path.unlink(missing_ok=True)
         finally:
+            _power["last_request"] = time.time()
             _request_lock.release()
 
     try:
