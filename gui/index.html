@@ -297,9 +297,8 @@ canvas.reveal{animation:reveal .6s ease both}
 
         <div class="field" id="fRefAudio" style="display:none">
           <label>REFERENCE AUDIO · 参考音频</label>
-          <label class="file-btn" id="refBtn">点击选择参考音频（干净人声，WAV/MP3）</label>
-          <input type="file" id="refAudio" accept="audio/*">
-        </div>
+          <label class="file-btn" id="refBtn"><span id="refBtnText">点击选择参考音频（干净人声，WAV/MP3）</span><br><span style="font-size:10.5px;opacity:.75">或把音频文件直接拖到此处 · 内嵌面板无法弹窗时请用系统浏览器打开本页</span></label>
+          <input type="file" id="refAudio" accept="audio/*">        </div>
         <div class="field" id="fRefText" style="display:none">
           <label>REF TRANSCRIPT · 文字稿（须与音频逐字一致）</label>
           <textarea id="refText" rows="2" placeholder="这是参考音频的准确文字稿。"></textarea>
@@ -460,11 +459,28 @@ document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
 /* ---------- sliders / file ---------- */
 document.getElementById('cfg').oninput = e=>document.getElementById('cfgVal').textContent = (+e.target.value).toFixed(1);
 document.getElementById('maxtok').oninput = e=>document.getElementById('tokVal').textContent = e.target.value;
-document.getElementById('refAudio').onchange = e=>{
-  const f = e.target.files[0], b = document.getElementById('refBtn');
-  b.textContent = f ? '✓ ' + f.name + ' (' + (f.size/1024|0) + ' KB)' : '点击选择参考音频';
+function setRefFile(f){
+  const b = document.getElementById('refBtn');
+  document.getElementById('refBtnText').textContent = f ? '✓ ' + f.name + ' (' + (f.size/1024|0) + ' KB)' : '点击选择参考音频（干净人声，WAV/MP3）';
   b.classList.toggle('has', !!f);
-};
+}
+document.getElementById('refAudio').onchange = e=>setRefFile(e.target.files[0]);
+/* Drag & drop: works even where the native file picker can't open
+   (e.g. embedded browser panes that swallow the file chooser). */
+{
+  const btn = document.getElementById('refBtn'), input = document.getElementById('refAudio');
+  btn.addEventListener('dragover', e=>{ e.preventDefault(); btn.classList.add('has'); });
+  btn.addEventListener('dragleave', ()=>{ if(!input.files[0]) btn.classList.remove('has'); });
+  btn.addEventListener('drop', e=>{
+    e.preventDefault();
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(!f) return;
+    try{
+      const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files;
+    }catch(err){ input.__dropped = f; } // older engines: fall back to a manual handle
+    setRefFile(f);
+  });
+}
 
 /* ---------- audio helpers ---------- */
 let audioCtx, currentSrc;
