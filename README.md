@@ -15,6 +15,9 @@ An opinionated fork of [breezeblue-ai/breeze-tts](https://github.com/breezeblue-
 | `encode=base64` / `?buffered=1` | Extra response modes on both speech endpoints: full-body Content-Length or JSON-wrapped base64, for clients whose streaming-binary handling is unreliable |
 | empty-generation guard | Buffered/batch paths return HTTP 502 when a generation yields no audio, so clients can retry instead of saving silence |
 | Japanese best-effort | Japanese text synthesizes (the model officially covers EN/ZH only). Japanese *instructions* trigger runaway looping (verified 52 s), so the GUI auto-detects kana instructions, drops them, and falls back to the default voice with a visible notice |
+| GPU power management | The console heartbeats every ~5 s; ~75 s after the page closes a watchdog drops the whole runtime (weights + CUDA graphs), returning VRAM to <20% of the card. The next synthesis request transparently rebuilds the runtime (warm-cache reload, tens of seconds). `BREEZE_GPU_HEARTBEAT_TIMEOUT` / `BREEZE_GPU_IDLE_SECONDS` tune or disable it (`0` = off). `GET /v1/power` and `POST /v1/power/heartbeat` expose live state |
+| client-side audio conversion | Reference uploads are decoded by the browser (mp3/m4a/aac/ogg/flac/wav), mixed to mono, resampled to 24 kHz and re-encoded WAV before upload — the server only ever sees normalized audio |
+| perf panel | The console shows live GPU utilization, VRAM and power state (HOT/COOL/WARMING) fed from `/v1/power` |
 
 ## Windows deployment notes (RTX 5080 / Blackwell sm120)
 
