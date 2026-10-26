@@ -448,6 +448,9 @@ document.getElementById('modes').addEventListener('click', e=>{
   document.getElementById('fRefText').style.display = hasRef?'':'none';
   const hasInstr = mode==='design'||mode==='direction';
   document.getElementById('fInstruction').style.display = hasInstr?'':'none';
+  // plain clone's template has no negative prompt: CFG is forced to 1
+  document.getElementById('cfg').disabled = mode==='clone';
+  document.getElementById('cfg').style.opacity = mode==='clone' ? .4 : 1;
 });
 
 /* ---------- chips insert at cursor ---------- */
@@ -676,8 +679,10 @@ document.getElementById('gen').onclick = async ()=>{
   const jpInstr = instrEl && hasKana(instrEl);
   if(jpInstr) instrEl = '';
   const hasInstr = (mode==='design'||mode==='direction') && instrEl;
-  // tts_plain template (no instruction, no reference) only supports cfg_scale=1
-  const effCfg = hasInstr || ((mode==='clone'||mode==='direction') && document.getElementById('refAudio').files[0]) ? cfg : 1;
+  // cfg>1 requires a template that defines a negative prompt: plain clone
+  // (ref_clone_tata) and tts_plain do not — only instruction paths do.
+  const refProvided = (mode==='clone'||mode==='direction') && document.getElementById('refAudio').files[0];
+  const effCfg = (hasInstr || (mode==='direction' && refProvided)) ? cfg : 1;
   const f = new FormData();
   f.append('text', text); f.append('cfg_scale', effCfg); f.append('seed', seed);
   if(hasInstr) f.append('instruction', instrEl);

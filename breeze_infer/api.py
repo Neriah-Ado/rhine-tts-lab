@@ -253,6 +253,31 @@ async def _save_upload(upload: UploadFile) -> Path:
     return path
 
 
+def _normalize_reference(path: Path) -> Path:
+    """Decode any soundfile-readable upload into mono 24 kHz s16 WAV.
+
+    Browsers hand over whatever file the user picked (44.1 kHz, stereo, mp3,
+    flac, ogg); downstream templates expect one consistent shape. Undecodable
+    inputs become a 400 instead of a deep 500.
+    """
+    import librosa
+    import soundfile as sf
+
+    try:
+        audio, _ = librosa.load(str(path), sr=24000, mono=True)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot decode reference audio '{path.suffix or '?'}' — use WAV/MP3/FLAC/OGG.",
+        ) from exc
+    if audio.size == 0:
+        raise HTTPException(status_code=400, detail="Reference audio contains no samples.")
+    normalized = path.with_suffix(".norm.wav")
+    sf.write(str(normalized), audio, 24000, subtype="PCM_16")
+    path.unlink(missing_ok=True)
+    return normalized
+
+
 def _checkpoint_head_weights(model) -> dict[torch.nn.Module, torch.nn.Parameter]:
     """Snapshot the projection heads before streaming graph setup casts them.
 
@@ -386,7 +411,7 @@ async def speech(
             )
         if has_reference:
             assert ref_audio is not None
-            reference_path = await _save_upload(ref_audio)
+            reference_path = _normalize_reference(await _save_upload(ref_audio))
 
         request_id = f"api-{uuid.uuid4().hex}"
         instruction = instruction.strip() if instruction else None
@@ -403,16 +428,22 @@ async def speech(
         template_name = select_template_name(request)
 
         set_all_seeds(seed)
-        inputs = prepare_inputs(
-            app.state.tokenizer,
-            app.state.audio_tokenizer,
-            app.state.model,
-            [request],
-            get_template(template_name),
-            guidance_scale=cfg_scale,
-            guidance_scale_ref=None,
-            guidance_scale_ins=None,
-        )
+        try:
+            inputs = prepare_inputs(
+                app.state.tokenizer,
+                app.state.audio_tokenizer,
+                app.state.model,
+                [request],
+                get_template(template_name),
+                guidance_scale=cfg_scale,
+                guidance_scale_ref=None,
+                guidance_scale_ins=None,
+            )
+        except ValueError as exc:
+            # e.g. cfg>1 on a template without a negative prompt: a bad request,
+            # not a server fault — surface it as 400 so clients can self-correct.
+            # cleanup() runs in the outer handler; the lock must release once.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     except BaseException:
         cleanup()
         raise
@@ -623,7 +654,7 @@ async def speech_batch(
             )
         if has_reference:
             assert ref_audio is not None
-            reference_path = await _save_upload(ref_audio)
+            reference_path = _normalize_reference(await _save_upload(ref_audio))
 
         def generate_and_cleanup() -> list[bytes]:
             try:
