@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -67,6 +68,97 @@ class ApiSettings:
 
 _settings: ApiSettings | None = None
 _request_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# GPU power management (Rhine TTS Lab): drop the whole runtime (weights, CUDA
+# graphs, caches) when no page heartbeat / synthesis has been seen for a while,
+# and rebuild it lazily on the next request. Idle VRAM drops to the bare CUDA
+# context (<1 GiB on a 16 GB card); the first request after a release pays the
+# reload+warmup cost (tens of seconds with warm compile caches).
+# ---------------------------------------------------------------------------
+import gc
+import time
+
+_power = {
+    "cold": False,
+    "warming": False,
+    "last_request": time.time(),
+    "last_heartbeat": time.time(),
+}
+GPU_HEARTBEAT_TIMEOUT = float(os.environ.get("BREEZE_GPU_HEARTBEAT_TIMEOUT", "75"))
+GPU_IDLE_RELEASE = float(os.environ.get("BREEZE_GPU_IDLE_SECONDS", "1800"))
+
+
+def _release_gpu_sync(app: FastAPI) -> None:
+    import gc as _gc
+
+    for attr in ("runtime", "batch_depth_decoder", "batch_head_weights", "audio_tokenizer", "model"):
+        if hasattr(app.state, attr):
+            try:
+                delattr(app.state, attr)
+            except Exception:
+                logging.exception("failed to drop app.state.%s", attr)
+    _gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    _power["cold"] = True
+    logging.warning("GPU released: runtime dropped, VRAM returned to the CUDA context")
+
+
+def _ensure_gpu(app: FastAPI) -> None:
+    if not _power["cold"] or _settings is None:
+        return
+    _power["warming"] = True
+    try:
+        _load_app(app, _settings)
+        _power["cold"] = False
+        _power["last_request"] = time.time()
+        logging.warning("GPU reactivated: runtime rebuilt")
+    finally:
+        _power["warming"] = False
+
+
+def _gpu_watchdog(app: FastAPI) -> None:
+    while True:
+        time.sleep(5)
+        try:
+            if _power["cold"] or _power["warming"]:
+                continue
+            now = time.time()
+            reason = None
+            if 0 < GPU_HEARTBEAT_TIMEOUT < now - _power["last_heartbeat"]:
+                reason = f"no page heartbeat for {now - _power['last_heartbeat']:.0f}s"
+            elif 0 < GPU_IDLE_RELEASE < now - _power["last_request"]:
+                reason = f"no synthesis for {now - _power['last_request']:.0f}s"
+            if reason and _request_lock.acquire(blocking=False):
+                try:
+                    print(f"[power] releasing GPU ({reason})", flush=True)
+                    _release_gpu_sync(app)
+                finally:
+                    _request_lock.release()
+        except Exception:
+            logging.exception("gpu watchdog cycle failed")
+
+
+# Cheap device-wide GPU stats, refreshed off the request path for /v1/power.
+_gpu_stats = {"util_pct": 0.0, "vram_used_gb": 0.0, "vram_total_gb": 0.0}
+
+
+def _gpu_stats_sampler() -> None:
+    while True:
+        try:
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                _gpu_stats["vram_used_gb"] = round((total - free) / 2**30, 2)
+                _gpu_stats["vram_total_gb"] = round(total / 2**30, 2)
+            probe = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=4,
+            )
+            _gpu_stats["util_pct"] = float(probe.stdout.strip().splitlines()[0])
+        except Exception:
+            pass  # stats are best-effort; never break the request path
+        time.sleep(5)
 logger = logging.getLogger(__name__)
 
 
@@ -352,6 +444,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _settings is None:
         raise RuntimeError("API settings are not initialized")
     _load_app(app, _settings)
+    threading.Thread(target=_gpu_watchdog, args=(app,), daemon=True, name="gpu-watchdog").start()
+    threading.Thread(target=_gpu_stats_sampler, daemon=True, name="gpu-stats").start()
     yield
 
 
@@ -360,9 +454,39 @@ app = FastAPI(title="Breeze TTS API", lifespan=_lifespan)
 
 @app.get("/health")
 def health() -> JSONResponse:
+    if _power["cold"]:
+        # server is alive but the runtime is unloaded to save VRAM
+        return JSONResponse({"status": "ok", "sample_rate": 24000, "gpu": "cold"})
     if not hasattr(app.state, "runtime"):
         return JSONResponse({"status": "loading"}, status_code=503)
-    return JSONResponse({"status": "ok", "sample_rate": app.state.runtime.sample_rate})
+    return JSONResponse({"status": "ok", "sample_rate": app.state.runtime.sample_rate, "gpu": "hot"})
+
+
+def _power_payload() -> dict:
+    now = time.time()
+    state = "cold" if _power["cold"] else ("warming" if _power["warming"] else "hot")
+    return {
+        "gpu": state,
+        "idle_request_s": round(now - _power["last_request"], 1),
+        "heartbeat_age_s": round(now - _power["last_heartbeat"], 1),
+        "heartbeat_timeout_s": GPU_HEARTBEAT_TIMEOUT,
+        "idle_release_s": GPU_IDLE_RELEASE,
+        "gpu_util_pct": _gpu_stats["util_pct"],
+        "vram_used_gb": _gpu_stats["vram_used_gb"],
+        "vram_total_gb": _gpu_stats["vram_total_gb"],
+    }
+
+
+@app.get("/v1/power")
+def power_status() -> JSONResponse:
+    return JSONResponse(_power_payload())
+
+
+@app.post("/v1/power/heartbeat")
+def power_heartbeat() -> JSONResponse:
+    # one round trip per GUI poll: register the beat and return full stats
+    _power["last_heartbeat"] = time.time()
+    return JSONResponse(_power_payload())
 
 
 @app.get("/v1/model")
@@ -387,6 +511,11 @@ async def speech(
         raise HTTPException(
             status_code=409, detail="An inference request is already running."
         )
+
+    if _power["cold"]:
+        # released while idle — rebuild the runtime before serving
+        await run_in_threadpool(_ensure_gpu, app)
+    _power["last_request"] = time.time()
 
     reference_path: Path | None = None
 
@@ -627,6 +756,10 @@ async def speech_batch(
         raise HTTPException(
             status_code=409, detail="An inference request is already running."
         )
+
+    if _power["cold"]:
+        await run_in_threadpool(_ensure_gpu, app)
+    _power["last_request"] = time.time()
 
     reference_path: Path | None = None
     worker_owns_cleanup = False
