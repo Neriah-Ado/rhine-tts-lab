@@ -332,7 +332,7 @@ canvas.reveal{animation:reveal .6s ease both}
       <div class="panel-h" id="ioTitle">文本输入<span class="tag">IO-03</span></div>
       <div class="panel-b">
         <div id="singleIO">
-          <textarea class="big" id="text" placeholder="输入要合成的文本。可用内联情绪标记：英文 (laugh) (sigh) (clears throat)，中文 [笑] [叹气] [咳嗽] [清嗓子]。"></textarea>
+          <textarea class="big" id="text" placeholder="输入要合成的文本。支持中文/英文；日文可合成（尽力而为，官方仅保证中英）。内联情绪标记：英文 (laugh) (sigh) (clears throat)，中文 [笑] [叹气] [咳嗽] [清嗓子]。"></textarea>
           <div class="chips">
             <span class="chip" data-t="(laugh)">(laugh)</span>
             <span class="chip" data-t="(sigh)">(sigh)</span>
@@ -342,6 +342,7 @@ canvas.reveal{animation:reveal .6s ease both}
             <span class="chip" data-t="[咳嗽]">[咳嗽]</span>
             <span class="chip" data-t="[清嗓子]">[清嗓子]</span>
           </div>
+          <div id="jpNote" style="display:none;font-size:11.5px;color:var(--accent);margin-top:8px;line-height:1.5"></div>
           <div class="gen-row">
             <button class="btn-gen" id="gen">
               <span class="eq"><i></i><i></i><i></i><i></i></span>
@@ -651,12 +652,29 @@ async function postSpeech(form, onNote){
 }
 
 /* ---------- generation ---------- */
+const hasKana = s => /[\u3041-\u309F\u30A0-\u30FF]/.test(s);
+function updateJpNote(text, instruction){
+  const note = document.getElementById('jpNote');
+  const jpText = hasKana(text), jpInstr = instruction && hasKana(instruction);
+  if(!jpText && !jpInstr){ note.style.display='none'; return; }
+  note.style.display='';
+  note.innerHTML = jpInstr
+    ? '⚠ 检测到日文声音指令：模型遇日文指令会复读失控，已自动改用默认音色（无指令）。<br>需要指定音色时请用中文描述，如「沉稳的年轻女声」。'
+    : 'ℹ 检测到日语文本：模型官方仅保证中英，日文为尽力而为（发音可能带口音）。可用中文指令微调语气，请避免日文指令。';
+}
+document.getElementById('text').addEventListener('input', ()=>updateJpNote(document.getElementById('text').value, document.getElementById('instruction').value.trim()));
+document.getElementById('instruction').addEventListener('input', ()=>updateJpNote(document.getElementById('text').value, document.getElementById('instruction').value.trim()));
+
 document.getElementById('gen').onclick = async ()=>{
   if(busy) return;
   const text = document.getElementById('text').value.trim();
   if(!text) return toast('请先输入文本', true);
   const cfg = +document.getElementById('cfg').value, seed = +document.getElementById('seed').value;
-  const instrEl = document.getElementById('instruction').value.trim();
+  let instrEl = document.getElementById('instruction').value.trim();
+  // Japanese instructions make the model loop uncontrollably (verified: 52s runaway
+  // at cfg=4, 13s even at cfg=1) — fall back to the default voice instead.
+  const jpInstr = instrEl && hasKana(instrEl);
+  if(jpInstr) instrEl = '';
   const hasInstr = (mode==='design'||mode==='direction') && instrEl;
   // tts_plain template (no instruction, no reference) only supports cfg_scale=1
   const effCfg = hasInstr || ((mode==='clone'||mode==='direction') && document.getElementById('refAudio').files[0]) ? cfg : 1;
@@ -673,7 +691,10 @@ document.getElementById('gen').onclick = async ()=>{
   }
   const meta = document.getElementById('meta');
   setBusy(true);
-  meta.innerHTML = 'GENERATING · <b>streaming…</b>' + (effCfg===1 && cfg!==1 ? ' · <span style="color:#ffa726">无指令模板已自动回退 CFG=1</span>' : '');
+  let notes = '';
+  if(jpInstr) notes += ' · <span style="color:#ffa726">日文指令已自动改用默认音色</span>';
+  else if(hasKana(text)) notes += ' · <span style="color:#ffa726">日文尽力而为</span>';
+  meta.innerHTML = 'GENERATING · <b>streaming…</b>' + (effCfg===1 && cfg!==1 && !jpInstr ? ' · <span style="color:#ffa726">无指令模板已自动回退 CFG=1</span>' : '') + notes;
   try{
     const {f32, wall, rtf} = await postSpeech(f, n=>{ meta.innerHTML = n; });
     const dur = play(f32);
@@ -695,7 +716,9 @@ document.getElementById('genBatch').onclick = async ()=>{
   if(lines.length>128) return toast('最多 128 条', true);
   const f = new FormData();
   f.append('texts', JSON.stringify(lines));
-  const instr = document.getElementById('instruction').value.trim();
+  let instr = document.getElementById('instruction').value.trim();
+  const jpInstr = instr && hasKana(instr);
+  if(jpInstr) instr = ''; // Japanese instructions trigger runaway looping
   const hasInstr = mode==='design' && instr;
   const effCfg = hasInstr ? +document.getElementById('cfg').value : 1;
   f.append('cfg_scale', effCfg);

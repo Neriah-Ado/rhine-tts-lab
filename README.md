@@ -14,6 +14,7 @@ An opinionated fork of [breezeblue-ai/breeze-tts](https://github.com/breezeblue-
 | sdpa patch | `breeze_infer/api.py` ships with `attn_implementation="eager"`; this fork switches it to `"sdpa"` (≈3.6× faster, RTF ≈ 0.55–0.7 on an RTX 5080) |
 | `encode=base64` / `?buffered=1` | Extra response modes on both speech endpoints: full-body Content-Length or JSON-wrapped base64, for clients whose streaming-binary handling is unreliable |
 | empty-generation guard | Buffered/batch paths return HTTP 502 when a generation yields no audio, so clients can retry instead of saving silence |
+| Japanese best-effort | Japanese text synthesizes (the model officially covers EN/ZH only). Japanese *instructions* trigger runaway looping (verified 52 s), so the GUI auto-detects kana instructions, drops them, and falls back to the default voice with a visible notice |
 
 ## Windows deployment notes (RTX 5080 / Blackwell sm120)
 
