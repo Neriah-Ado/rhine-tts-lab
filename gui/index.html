@@ -301,7 +301,7 @@ canvas.reveal{animation:reveal .6s ease both}
           <input type="file" id="refAudio" accept="audio/*">        </div>
         <div class="field" id="fRefText" style="display:none">
           <label>REF TRANSCRIPT · 文字稿（须与音频逐字一致）</label>
-          <textarea id="refText" rows="2" placeholder="这是参考音频的准确文字稿。"></textarea>
+          <textarea id="refText" rows="2" placeholder="这是参考音频的准确文字稿。中文/英文/日文均可；日文音频可跨语克隆出中文或英文语音。"></textarea>
         </div>
       </div>
     </div>
@@ -659,14 +659,20 @@ const hasKana = s => /[\u3041-\u309F\u30A0-\u30FF]/.test(s);
 function updateJpNote(text, instruction){
   const note = document.getElementById('jpNote');
   const jpText = hasKana(text), jpInstr = instruction && hasKana(instruction);
-  if(!jpText && !jpInstr){ note.style.display='none'; return; }
+  const jpRef = document.getElementById('refText').value.trim() && hasKana(document.getElementById('refText').value.trim());
+  if(!jpText && !jpInstr && !jpRef){ note.style.display='none'; return; }
   note.style.display='';
-  note.innerHTML = jpInstr
-    ? '⚠ 检测到日文声音指令：模型遇日文指令会复读失控，已自动改用默认音色（无指令）。<br>需要指定音色时请用中文描述，如「沉稳的年轻女声」。'
-    : 'ℹ 检测到日语文本：模型官方仅保证中英，日文为尽力而为（发音可能带口音）。可用中文指令微调语气，请避免日文指令。';
+  if(jpInstr){
+    note.innerHTML = '⚠ 检测到日文声音指令：模型遇日文指令会复读失控，已自动改用默认音色（无指令）。<br>需要指定音色时请用中文描述，如「沉稳的年轻女声」。';
+  } else if(jpRef){
+    note.innerHTML = 'ℹ 日文参考音频 + 日文文稿 → 跨语克隆：可生成中文/英文语音，音色取自参考音频（尽力而为，发音可能带日语腔）。';
+  } else {
+    note.innerHTML = 'ℹ 检测到日语文本：模型官方仅保证中英，日文为尽力而为（发音可能带口音）。可用中文指令微调语气，请避免日文指令。';
+  }
 }
 document.getElementById('text').addEventListener('input', ()=>updateJpNote(document.getElementById('text').value, document.getElementById('instruction').value.trim()));
 document.getElementById('instruction').addEventListener('input', ()=>updateJpNote(document.getElementById('text').value, document.getElementById('instruction').value.trim()));
+document.getElementById('refText').addEventListener('input', ()=>updateJpNote(document.getElementById('text').value, document.getElementById('instruction').value.trim()));
 
 document.getElementById('gen').onclick = async ()=>{
   if(busy) return;
