@@ -79,6 +79,8 @@ _request_lock = threading.Lock()
 import gc
 import time
 
+_PROCESS_T0 = time.time()
+
 _power = {
     "cold": False,
     "warming": False,
@@ -111,6 +113,7 @@ def _ensure_gpu(app: FastAPI) -> None:
     _power["warming"] = True
     try:
         _load_app(app, _settings)
+        _warmup_runtime(app)
         _power["cold"] = False
         _power["last_request"] = time.time()
         logging.warning("GPU reactivated: runtime rebuilt")
@@ -461,11 +464,6 @@ def _load_app(app: FastAPI, settings: ApiSettings) -> None:
     runtime = FastBreezeStreamingRuntime(
         model, audio_tokenizer, config, tokenizer=tokenizer
     )
-    if runtime.fast_enabled:
-        profile = load_warmup_profile(FAST_CONFIG)
-        profile = replace(profile, codec_chunk_frames=runtime.codec_chunk_frames)
-        manifest = runtime.warmup_from_profile(profile)
-        print(f"fast warmup: {manifest['total_elapsed_ms']:.2f} ms", flush=True)
 
     app.state.tokenizer = tokenizer
     app.state.model = model
@@ -473,6 +471,46 @@ def _load_app(app: FastAPI, settings: ApiSettings) -> None:
     app.state.runtime = runtime
     app.state.batch_head_weights = batch_head_weights
     app.state.batch_depth_decoder = batch_depth_decoder
+
+
+def _warmup_runtime(app: FastAPI) -> None:
+    """Capture the fast-path CUDA graphs (blocking)."""
+    runtime = app.state.runtime
+    if runtime.fast_enabled:
+        profile = load_warmup_profile(FAST_CONFIG)
+        profile = replace(profile, codec_chunk_frames=runtime.codec_chunk_frames)
+        manifest = runtime.warmup_from_profile(profile)
+        print(f"fast warmup: {manifest['total_elapsed_ms']:.2f} ms", flush=True)
+
+
+# Startup runs without warmup so the port opens in seconds; the graphs are
+# captured in a background thread. Requests gate on this: once it is done
+# they run at full speed, if it failed they fall back to lazy eager capture
+# (iter_audio_chunks captures whatever graph it misses on demand).
+_warmup = {"state": "pending", "error": None}
+
+
+def _background_warmup(app: FastAPI) -> None:
+    _power["warming"] = True
+    try:
+        _warmup_runtime(app)
+        _warmup["state"] = "done"
+        print("[power] background warmup complete", flush=True)
+    except Exception as exc:
+        _warmup["state"] = "failed"
+        _warmup["error"] = repr(exc)
+        logging.exception("background warmup failed — serving with lazy capture")
+    finally:
+        _power["warming"] = False
+
+
+async def _wait_warmup(timeout_s: float = 300.0) -> None:
+    deadline = time.time() + timeout_s
+    while _warmup["state"] in ("pending", "running"):
+        if time.time() >= deadline:
+            logging.warning("warmup wait timed out; serving with what is ready")
+            return
+        await asyncio.sleep(0.5)
 
 
 async def _acquire_slot(wait_s: float) -> None:
@@ -495,8 +533,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _settings is None:
         raise RuntimeError("API settings are not initialized")
     _load_app(app, _settings)
-    # warmup takes a while and uvicorn only listens afterwards — restart the
-    # heartbeat clock so the watchdog does not instantly release the fresh runtime
+    print(f"[power] listening in {time.time() - _PROCESS_T0:.1f}s; "
+          "capturing fast-path graphs in background", flush=True)
+    _power["warming"] = True
+    _warmup["state"] = "running"
+    threading.Thread(target=_background_warmup, args=(app,), daemon=True, name="warmup").start()
+    # heartbeat clock resets here: uvicorn only just started listening
     _power["last_heartbeat"] = _power["last_request"] = time.time()
     threading.Thread(target=_gpu_watchdog, args=(app,), daemon=True, name="gpu-watchdog").start()
     threading.Thread(target=_gpu_stats_sampler, daemon=True, name="gpu-stats").start()
@@ -564,6 +606,7 @@ async def speech(
     wait: float = Form(0.0),
 ) -> Response:
     await _acquire_slot(wait)
+    await _wait_warmup()
 
     if _power["cold"]:
         # released while idle — rebuild the runtime before serving
@@ -808,6 +851,7 @@ async def speech_batch(
     ``X-Segment-Bytes`` lists each segment's byte length so callers can split it.
     """
     await _acquire_slot(wait)
+    await _wait_warmup()
 
     if _power["cold"]:
         await run_in_threadpool(_ensure_gpu, app)

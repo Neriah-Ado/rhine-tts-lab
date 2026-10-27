@@ -18,6 +18,14 @@ An opinionated fork of [breezeblue-ai/breeze-tts](https://github.com/breezeblue-
 | GPU power management | The console heartbeats every ~5 s; ~75 s after the page closes a watchdog drops the whole runtime (weights + CUDA graphs), returning VRAM to <20% of the card. The next synthesis request transparently rebuilds the runtime (warm-cache reload, tens of seconds). `BREEZE_GPU_HEARTBEAT_TIMEOUT` / `BREEZE_GPU_IDLE_SECONDS` tune or disable it (`0` = off). `GET /v1/power` and `POST /v1/power/heartbeat` expose live state |
 | client-side audio conversion | Reference uploads are decoded by the browser (mp3/m4a/aac/ogg/flac/wav), mixed to mono, resampled to 24 kHz and re-encoded WAV before upload — the server only ever sees normalized audio |
 | perf panel | The console shows live GPU utilization, VRAM and power state (HOT/COOL/WARMING) fed from `/v1/power` |
+| deferred warmup | The port opens ~9 s after launch (model load only); CUDA-graph capture runs in a background thread and synthesis requests gate on it, so a cold box serves full-speed audio within ~35 s instead of blocking startup for 2–3 minutes. Warmup failure degrades to lazy eager capture instead of taking the server down |
+
+### Technologies evaluated for startup speed
+
+- **AOTInductor** (`torch._inductor.aot_compile`): pre-compiles graphs to a loadable `.so`, but this codebase compiles per-bucket graphs with dynamic shapes at runtime — invasive to retrofit.
+- **vLLM-Omni / SGLang-Omni Breeze TTS 2 support** (tracked in vllm-project/vllm-omni#6656, sgl-project/sglang-omni#1973): continuous batching would be a large serving win, but both stacks are Linux-only; this lab runs natively on Windows.
+- **[HoppouAI/Breeze-TTS-2.cpp](https://github.com/HoppouAI/Breeze-TTS-2.cpp)** (GGUF/Vulkan C++ engine): Windows-native and fast to start, but a different engine with its own quality/feature envelope.
+- **Adopted**: `nvidia-ml-py` (in-process NVML sampling) and PyTorch's persistent Inductor FX cache + background warmup, which together take restarts from ~2.5 min to a ~9 s port-open with full speed a beat later.
 
 ## Windows deployment notes (RTX 5080 / Blackwell sm120)
 
