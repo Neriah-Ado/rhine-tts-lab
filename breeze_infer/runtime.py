@@ -91,6 +91,7 @@ def load_runtime(
         ckpt_dir,
         dtype=torch.bfloat16,
         attn_implementation=attn_implementation,
+        low_cpu_mem_usage=True,
     )
     model.to(device).eval()
 

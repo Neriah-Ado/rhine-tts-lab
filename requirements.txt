@@ -11,3 +11,6 @@ python-multipart>=0.0.18
 pytest>=8.0
 ruff>=0.12
 nvidia-ml-py>=12.575
+orjson
+httptools
+psutil

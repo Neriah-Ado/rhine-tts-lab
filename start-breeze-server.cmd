@@ -7,5 +7,6 @@ set TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
 set TORCHINDUCTOR_CACHE_DIR=H:\ic
 set TRITON_CACHE_DIR=H:\tc
 set TORCHINDUCTOR_COMPILE_THREADS=1
+set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 cd /d "H:\Vibe coding\breeze-tts"
 .venv\Scripts\python.exe -m breeze_infer.api "H:\Vibe coding\breeze-tts-2" --host 127.0.0.1 --port 7860 --fast-all

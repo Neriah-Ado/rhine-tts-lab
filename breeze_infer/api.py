@@ -21,7 +21,7 @@ import anyio
 import numpy as np
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, ORJSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.types import Receive, Scope, Send
 from transformers.generation.logits_process import LogitsProcessorList
@@ -441,6 +441,7 @@ def _swapped_weights(
 
 def _load_app(app: FastAPI, settings: ApiSettings) -> None:
     torch.set_float32_matmul_precision("high")  # TF32 on Blackwell tensor cores
+    torch.backends.cudnn.benchmark = True  # autotune codec convs for fixed shapes
     tokenizer, model, audio_tokenizer = load_runtime(
         settings.model,
         device=resolve_device(),
@@ -494,6 +495,9 @@ def _background_warmup(app: FastAPI) -> None:
     _power["warming"] = True
     try:
         _warmup_runtime(app)
+        import gc
+        gc.collect()
+        gc.freeze()  # move the huge module graph out of collection scans: fewer GC pauses mid-synthesis
         _warmup["state"] = "done"
         print("[power] background warmup complete", flush=True)
     except Exception as exc:
@@ -532,6 +536,21 @@ async def _acquire_slot(wait_s: float) -> None:
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _settings is None:
         raise RuntimeError("API settings are not initialized")
+
+    # Anti-jitter: stop the access log from spamming I/O on every heartbeat,
+    # raise process priority so synthesis wins scheduling under system load.
+    class _QuietAccess(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "/v1/power" not in record.getMessage() and "/health" not in record.getMessage()
+    logging.getLogger("uvicorn.access").addFilter(_QuietAccess())
+    if not os.environ.get("BREEZE_NO_PRIORITY"):
+        try:
+            import psutil
+            psutil.Process().nice(psutil.HIGH_PRIORITY_CLASS)
+            print("[power] process priority raised (HIGH_PRIORITY_CLASS)", flush=True)
+        except Exception as exc:
+            print(f"[power] priority raise skipped: {exc}", flush=True)
+
     _load_app(app, _settings)
     print(f"[power] listening in {time.time() - _PROCESS_T0:.1f}s; "
           "capturing fast-path graphs in background", flush=True)
@@ -545,11 +564,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Breeze TTS API", lifespan=_lifespan)
+app = FastAPI(title="Breeze TTS API", lifespan=_lifespan, default_response_class=ORJSONResponse)
 
 
 @app.get("/health")
-def health() -> JSONResponse:
+async def health() -> JSONResponse:
     if _power["cold"]:
         # server is alive but the runtime is unloaded to save VRAM
         return JSONResponse({"status": "ok", "sample_rate": 24000, "gpu": "cold"})
@@ -575,12 +594,12 @@ def _power_payload() -> dict:
 
 
 @app.get("/v1/power")
-def power_status() -> JSONResponse:
+async def power_status() -> JSONResponse:
     return JSONResponse(_power_payload())
 
 
 @app.post("/v1/power/heartbeat")
-def power_heartbeat() -> JSONResponse:
+async def power_heartbeat() -> JSONResponse:
     # one round trip per GUI poll: register the beat and return full stats
     _power["last_heartbeat"] = time.time()
     return JSONResponse(_power_payload())
